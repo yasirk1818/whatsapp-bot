@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Dashboard</title>
+</head>
+<body>
+    <h1>My Dashboard</h1>
+    <a href="/logout">Logout</a>
+    
+    <h2>My Devices</h2>
+    <ul>
+        <% devices.forEach(device => { %>
+            <li>
+                <strong><%= device.name %></strong> (<%= device.status %>) - <%= device.number || 'Not connected' %>
+                <a href="/dashboard/device/<%= device._id %>">Manage</a>
+            </li>
+        <% }) %>
+    </ul>
+
+    <h2>Add New Device</h2>
+    <form action="/dashboard/add-device" method="POST">
+        <input type="text" name="deviceName" placeholder="Enter device name (e.g., My Phone)" required>
+        <button type="submit">Add Device & Get QR</button>
+    </form>
+</body>
+</html>

@@ -1,97 +1,84 @@
-// -----------------------------------------------------------------
+// =================================================================
 //                         IMPORTS & SETUP
-// -----------------------------------------------------------------
+// =================================================================
 const express = require('express');
 const mongoose = require('mongoose');
 const session = require('express-session');
 const path = require('path');
 
-// Route imports
+// Apne banaye hue modules ko import karna
 const authRoutes = require('./routes/auth');
 const dashboardRoutes = require('./routes/dashboard');
-
-// WhatsApp Manager import
 const { initializeAllClients } = require('./whatsapp-manager');
 
-// Initialize Express App
+// Express app ko initialize karna
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// -----------------------------------------------------------------
-//                         MIDDLEWARE
-// -----------------------------------------------------------------
 
-// Body Parsers for handling POST requests
+// =================================================================
+//                         MIDDLEWARE
+// =================================================================
+
+// Form ka data parhne ke liye (e.g., email, password from login form)
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve static files (CSS, client-side JS, images) from a 'public' folder
-// Aap ek 'public' naam ka folder bana kar usmein apni CSS files rakh sakte hain.
+// Yeh line 'public' folder ko register karti hai. Agar aap custom CSS/JS
+// files rakhenge to woh is folder mein aayengi.
 app.use(express.static(path.join(__dirname, 'public')));
 
-// EJS View Engine Setup
-// Batata hai ke frontend templates 'views' folder mein hain
+// View Engine (EJS) ko set karna taake hum HTML pages dikha sakein
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 
-// Express Session Middleware for User Authentication
-// User login state ko manage karne ke liye
+// User login session ko manage karne ke liye
 app.use(session({
-    secret: 'a-very-strong-and-long-secret-key-for-your-app', // PRODUCTION mein isko environment variable se load karein
+    secret: 'koi-bhi-lamba-aur-mushkil-sa-secret-yahan-likh-dein',
     resave: false,
     saveUninitialized: true,
-    cookie: {
-        secure: false, // Agar HTTPS istemal kar rahe hain to isko 'true' karein
-        httpOnly: true,
-        maxAge: 24 * 60 * 60 * 1000 // Session 24 ghante tak valid rahega
-    }
+    cookie: { secure: false } // Agar HTTPS istemal karein to isay 'true' kar dein
 }));
 
 
-// -----------------------------------------------------------------
-//                         DATABASE CONNECTION
-// -----------------------------------------------------------------
+// =================================================================
+//                      DATABASE CONNECTION
+// =================================================================
+const MONGO_URI = 'mongodb://127.0.0.1:27017/whatsapp-bot';
 
-// MongoDB se connect karein
-// Note: 'whatsapp-auto-reply-bot' aapke database ka naam hai, aap isse change kar sakte hain.
-mongoose.connect('mongodb://localhost:27017/whatsapp-auto-reply-bot', {
-    useNewUrlParser: true,
-    useUnifiedTopology: true
-}).then(() => {
-    console.log('MongoDB Connected Successfully!');
-    // Jab database connect ho jaye, tab pehle se saved WhatsApp clients ko initialize karein
-    initializeAllClients();
-}).catch(err => {
-    console.error('MongoDB Connection Error:', err);
-});
+mongoose.connect(MONGO_URI)
+    .then(() => {
+        console.log('MongoDB Connected Successfully!');
+        // Database connect hone ke baad hi WhatsApp clients ko start karein
+        initializeAllClients();
+    })
+    .catch(err => {
+        console.error('DATABASE CONNECTION FAILED:', err.message);
+        console.error('Tip: Check karein ke aapka MongoDB service (sudo systemctl status mongod) chal rahi hai ya nahi.');
+    });
 
 
-// -----------------------------------------------------------------
+// =================================================================
 //                             ROUTES
-// -----------------------------------------------------------------
+// =================================================================
 
-// Root URL (/) ko seedha login page par redirect karein
+// Website ke main URL ('/') par kya karna hai
 app.get('/', (req, res) => {
-    // Agar user pehle se logged in hai to usay dashboard par bhej do
+    // Agar user logged in hai to dashboard par bhejo, warna login page par
     if (req.session.userId) {
         return res.redirect('/dashboard');
     }
-    // Warna login page par bhej do
     res.redirect('/login');
 });
 
-// Authentication routes (Signup, Login, Logout)
+// Authentication (login/signup) aur Dashboard ke routes ko istemal karna
 app.use('/', authRoutes);
-
-// Dashboard and device management routes
 app.use('/dashboard', dashboardRoutes);
 
 
-// -----------------------------------------------------------------
-//                         SERVER START
-// -----------------------------------------------------------------
-
+// =================================================================
+//                         START THE SERVER
+// =================================================================
 app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
-    console.log('Open your browser and navigate to the URL to begin.');
 });

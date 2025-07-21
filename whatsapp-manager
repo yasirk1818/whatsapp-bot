@@ -1,0 +1,127 @@
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, Browsers } = require('@whiskeysockets/baileys');
+const pino = require('pino');
+const fs = require('fs');
+const Device = require('./models/Device');
+
+const clients = {};
+const qrStore = {};
+
+const initializeClient = async (device) => {
+    const clientId = device.clientId;
+    console.log(`[BAILEYS] Initializing client for: ${clientId}`);
+
+    const { state, saveCreds } = await useMultiFileAuthState(`./sessions/${clientId}`);
+    const { version } = await fetchLatestBaileysVersion();
+
+    const sock = makeWASocket({
+        version,
+        auth: state,
+        printQRInTerminal: false,
+        logger: pino({ level: 'silent' }),
+        browser: Browsers.macOS('Desktop'),
+    });
+
+    clients[clientId] = sock;
+
+    // --- Connection Events ---
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect, qr } = update;
+
+        if (qr) {
+            qrStore[clientId] = qr;
+            await Device.updateOne({ clientId }, { status: 'qr' });
+        }
+
+        if (connection === 'close') {
+            const statusCode = (lastDisconnect.error)?.output?.statusCode;
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            if (statusCode === DisconnectReason.loggedOut) {
+                console.log(`[BAILEYS] Device logged out for ${clientId}.`);
+                await Device.updateOne({ clientId }, { status: 'disconnected' });
+                if (fs.existsSync(`./sessions/${clientId}`)) {
+                    fs.rmSync(`./sessions/${clientId}`, { recursive: true, force: true });
+                }
+            } else if (shouldReconnect) {
+                console.log(`[BAILEYS] Connection closed for ${clientId}, reconnecting...`);
+                initializeClient(device);
+            }
+        } 
+        else if (connection === 'open') {
+            console.log(`[BAILEYS] Connection opened for ${clientId}!`);
+            const number = sock.user.id.split(':')[0];
+            await Device.updateOne({ clientId }, { status: 'connected', number: number });
+        }
+    });
+
+    // --- Credentials Update Event ---
+    sock.ev.on('creds.update', saveCreds);
+
+    // --- Incoming Calls Handle Karna ---
+    sock.ev.on('call', async (call) => {
+        try {
+            const deviceData = await Device.findOne({ clientId });
+            if (deviceData && deviceData.settings.rejectCalls && call[0].status === 'offer') {
+                console.log(`[BAILEYS] Rejecting incoming call for ${clientId}...`);
+                await sock.rejectCall(call[0].id, call[0].from);
+            }
+        } catch(err) {
+            console.error(`[BAILEYS] Error rejecting call for ${clientId}:`, err);
+        }
+    });
+
+    // --- Naye Messages Handle Karna (Updated Auto-Read Logic) ---
+    sock.ev.on('messages.upsert', async (m) => {
+        const msg = m.messages[0];
+        if (!msg.message || msg.key.fromMe) return;
+
+        const senderJid = msg.key.remoteJid;
+
+        try {
+            const deviceData = await Device.findOne({ clientId });
+            if (!deviceData || deviceData.status !== 'connected') return;
+
+            // =============================================
+            //      NAYI AUR BEHTAREEN AUTO READ LOGIC
+            // =============================================
+            if (deviceData.settings.autoRead) {
+                const isGroup = senderJid.endsWith('@g.us');
+                const key = {
+                    remoteJid: senderJid,
+                    id: msg.key.id,
+                    participant: isGroup ? msg.key.participant : undefined
+                };
+                await sock.readMessages([key]);
+            }
+            // =============================================
+
+            const msgText = msg.message.conversation || msg.message.extendedTextMessage?.text;
+            if (!msgText) return;
+            
+            const matchedKeyword = deviceData.keywords.find(kw => msgText.toLowerCase() === kw.keyword.toLowerCase());
+            if (matchedKeyword) {
+                await sock.sendMessage(senderJid, { text: matchedKeyword.reply });
+            }
+        } catch (err) {
+            console.error(`[BAILEYS] Error processing message for ${clientId}:`, err);
+        }
+    });
+
+
+    // --- ALWAYS ONLINE LOGIC ---
+    setInterval(async () => {
+        try {
+            const deviceData = await Device.findOne({ clientId });
+            if (deviceData && deviceData.status === 'connected' && deviceData.settings.alwaysOnline) {
+                await sock.sendPresenceUpdate('composing', sock.user.id.split(':')[0] + '@s.whatsapp.net');
+            }
+        } catch (err) { /* Ignore errors */ }
+    }, 5 * 60 * 1000); // Har 5 minute
+
+};
+
+
+// --- Helper Functions ---
+function getQrFromStore(clientId) { const qr = qrStore[clientId]; if (qr) { delete qrStore[clientId]; return qr; } return null; }
+async function initializeAllClients() { const devices = await Device.find({ status: { $ne: 'disconnected' } }); for (const device of devices) { await initializeClient(device); } }
+function getClient(clientId) { return clients[clientId]; }
+module.exports = { initializeClient, initializeAllClients, getClient, getQrFromStore };
